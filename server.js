@@ -1,5 +1,11 @@
 const zmq = require('zeromq')
 
+const originalLog = console.log
+console.log = (...args) => originalLog(`[${new Date().toISOString()}]`, ...args)
+
+const originalError = console.error
+console.error = (...args) => originalError(`[${new Date().toISOString()}]`, ...args)
+
 async function runServer() {
   const sipPlayerResponder = new zmq.Reply()
   const sipPlayerPublisher = new zmq.Publisher()

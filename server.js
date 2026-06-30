@@ -6,6 +6,36 @@ console.log = (...args) => originalLog(`[${new Date().toISOString()}]`, ...args)
 const originalError = console.error
 console.error = (...args) => originalError(`[${new Date().toISOString()}]`, ...args)
 
+// Helper to simulate audio playback time
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
+// 1. Persisted Registration State (Clears on restart/shutdown)
+// Changed to an empty array to handle multiple registrations. 
+// Starting empty ensures a restart results in an "unregistered" state.
+let registeredAccounts = [] 
+
+// 2. Extracted background task to prevent blocking the ZMQ loop
+async function simulateAudioPlayback(command, publisher) {
+  try {
+    console.log(`[STATE] Starting call simulation for: ${command}`)
+    
+    // Tell the client we are starting the call.
+    await publisher.send('sending call command')
+    await sleep(50) // Tiny delay to simulate network/processing
+    await publisher.send('Confirmation: starting call')
+
+    // Simulate the audio playing for 5 seconds.
+    console.log('[STATE] Audio is playing. Line is busy for 5 seconds...')
+    await sleep(5000)
+
+    // Tell the client the call is done.
+    console.log('[STATE] Audio finished. Line is now free.')
+    await publisher.send('Finishing way: audio was fully streamed')
+  } catch (err) {
+    console.error('[ERROR] Audio simulation failed:', err)
+  }
+}
+
 async function runServer() {
   const sipPlayerResponder = new zmq.Reply()
   const sipPlayerPublisher = new zmq.Publisher()
@@ -16,40 +46,59 @@ async function runServer() {
   console.log('Mock sip_player listening locally on:')
   console.log(' - Commands (REP): tcp://127.0.0.1:5555')
   console.log(' - Info (PUB): tcp://127.0.0.1:5556')
+  originalLog() // Add a blank line after startup text
 
-  // Helper to simulate audio playback time
-  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-
+  // Main Event Loop
   for await (const [msg] of sipPlayerResponder) {
     const command = msg.toString()
-    console.log(`[LOG] Received command from client: ${command}`)
+    let responseMsg = ''
 
-    // 1. Reply to REQ commands
+    // Determine the response based on the command
     if (command === 'status') {
-      // Must return 'status: registered' so the client knows it can start making calls
-      await sipPlayerResponder.send('status: registered')
-    } else {
-      await sipPlayerResponder.send(`ACK: ${command}`)
+      if (registeredAccounts.length > 0) {
+        // Join the array so you can see all registered accounts
+        responseMsg = `status: registered (${registeredAccounts.join(', ')})`
+      } else {
+        responseMsg = `status: unregistered`
+      }
+    } 
+    else if (command.startsWith('register:')) {
+      const account = command.split(':')[1] || 'unknown'
+      
+      // Add to array only if it isn't already registered
+      if (!registeredAccounts.includes(account)) {
+        registeredAccounts.push(account)
+      }
+      
+      responseMsg = `ACK: registered as ${account}`
+    }
+    else if (command.startsWith('unregister')) {
+      // Handle both specific unregisters ("unregister:account1") or wiping everything ("unregister")
+      if (command.includes(':')) {
+        const accountToRemove = command.split(':')[1]
+        registeredAccounts = registeredAccounts.filter(acc => acc !== accountToRemove)
+        responseMsg = `ACK: unregistered ${accountToRemove}`
+      } else {
+        registeredAccounts = [] // Wipe all
+        responseMsg = 'ACK: all accounts unregistered'
+      }
+    }
+    else {
+      // Default fallback for calls or unknown commands
+      responseMsg = `ACK: ${command}`
     }
 
-    // 2. Simulate the State Machine for 'call' commands
+    // Log what came in, what goes out, and a blank line
+    console.log(`[IN]  ${command}`)
+    console.log(`[OUT] ${responseMsg}`)
+    originalLog()
+
+    // Send the constructed reply to satisfy ZMQ REP requirements
+    await sipPlayerResponder.send(responseMsg)
+
+    // 3. Fire the audio simulation in the background without awaiting it!
     if (command.startsWith('call:')) {
-      console.log(`[STATE] Starting call simulation for: ${command}`)
-      
-      // Tell the client we are starting the call. This sets lineStatusStore.setLineBusy(true)
-      await sipPlayerPublisher.send('sending call command')
-      await sleep(50) // Tiny delay to simulate network/processing
-      await sipPlayerPublisher.send('Confirmation: starting call')
-
-      // Simulate the audio playing for 5 seconds.
-      // During this time, the line is busy! The audioQueueManager will NOT send the next 'call:' command.
-      console.log('[STATE] Audio is playing. Line is busy for 5 seconds...')
-      await sleep(5000)
-
-      // Tell the client the call is done. This sets lineStatusStore.setLineBusy(false)
-      // and triggers the queue to drain the next item.
-      console.log('[STATE] Audio finished. Line is now free.')
-      await sipPlayerPublisher.send('Finishing way: audio was fully streamed')
+      simulateAudioPlayback(command, sipPlayerPublisher)
     }
   }
 }

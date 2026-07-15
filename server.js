@@ -9,6 +9,24 @@ console.error = (...args) => originalError(`[${new Date().toISOString()}]`, ...a
 // Helper to simulate audio playback time
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
+const DEFAULT_AUDIO_DURATION_SECONDS = 5
+
+function parseCallDurationSeconds(command) {
+  if (!command.startsWith('call:')) return null
+
+  const parts = command.split(':')
+  if (parts.length < 3) return null
+
+  const filepath = parts[2]
+  const match = filepath.match(/(\d+)s\.wav$/i)
+  if (!match) return null
+
+  const seconds = parseInt(match[1], 10)
+  if (!Number.isFinite(seconds) || seconds < 0) return null
+
+  return seconds
+}
+
 // 1. Persisted Registration State (Clears on restart/shutdown)
 // Changed to an empty array to handle multiple registrations. 
 // Starting empty ensures a restart results in an "unregistered" state.
@@ -24,9 +42,10 @@ async function simulateAudioPlayback(command, publisher) {
     await sleep(50) // Tiny delay to simulate network/processing
     await publisher.send('Confirmation: starting call')
 
-    // Simulate the audio playing for 5 seconds.
-    console.log('[STATE] Audio is playing. Line is busy for 5 seconds...')
-    await sleep(5000)
+    const durationSeconds = parseCallDurationSeconds(command) ?? DEFAULT_AUDIO_DURATION_SECONDS
+
+    console.log(`[STATE] Audio is playing. Line is busy for ${durationSeconds} seconds...`)
+    await sleep(durationSeconds * 1000)
 
     // Tell the client the call is done.
     console.log('[STATE] Audio finished. Line is now free.')
